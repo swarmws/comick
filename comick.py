@@ -116,6 +116,73 @@ async def scrape_get(url: str):
     
     return result
 
+@app.get("/cover")
+async def cover_endpoint(slug: str):
+    """Fetch all cover image URLs for a comic by title search"""
+    scraper = cloudscraper.create_scraper()
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://comick.io/",
+        "Origin": "https://comick.io",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
+    # 1. Search by title to get comic slug
+    search_resp = scraper.get(
+        "https://api.comick.dev/v1.0/search/",
+        params={"q": slug, "limit": 10, "type": "comic"},
+        headers=headers,
+        timeout=15
+    )
+    if search_resp.status_code != 200:
+        raise HTTPException(status_code=400, detail="Not Found")
+    items = search_resp.json()
+    if not isinstance(items, list):
+        items = items.get("result", items.get("results", items.get("data", [])))
+    if not items:
+        raise HTTPException(status_code=400, detail="Not Found")
+    comic_slug = items[0].get("slug")
+    if not comic_slug:
+        raise HTTPException(status_code=400, detail="Not Found")
+
+    comic_headers = {**headers, "Referer": f"https://comick.io/comic/{comic_slug}"}
+
+    # 2. Get build ID from homepage
+    build_id = None
+    home_resp = scraper.get("https://comick.dev", headers={"User-Agent": headers["User-Agent"]}, timeout=15)
+    if home_resp.status_code == 200:
+        match = re.search(r'<script id="__NEXT_DATA__".*?>(.*?)</script>', home_resp.text, re.DOTALL)
+        if match:
+            try:
+                build_id = json.loads(match.group(1)).get("buildId")
+            except Exception:
+                pass
+
+    if not build_id:
+        raise HTTPException(status_code=400, detail="Not Found")
+
+    # 3. Fetch covers from Next.js data
+    next_resp = scraper.get(
+        f"https://comick.io/_next/data/{build_id}/comic/{comic_slug}/cover.json",
+        params={"slug": comic_slug},
+        headers=comic_headers,
+        timeout=15
+    )
+    if next_resp.status_code != 200:
+        raise HTTPException(status_code=400, detail="Not Found")
+    try:
+        page_props = next_resp.json().get("pageProps", {})
+        raw = page_props.get("md_covers") or page_props.get("comic", {}).get("md_covers", [])
+        covers = [f"https://meo.comick.pictures/{c['b2key']}" for c in raw if isinstance(c, dict) and c.get("b2key")]
+    except Exception:
+        covers = []
+
+    if not covers:
+        raise HTTPException(status_code=400, detail="Not Found")
+    return covers
+
+
 if __name__ == "__main__":
     uvicorn.run(
         app,
@@ -124,5 +191,3 @@ if __name__ == "__main__":
         reload=False,
         log_level="info"
     )
-
-
