@@ -6,7 +6,7 @@ A FastAPI service for scraping Comick lists
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import cloudscraper
+from curl_cffi import requests as curl_requests
 import json
 import re
 from typing import Dict, List, Any
@@ -38,9 +38,7 @@ def scrape_comick_list(url: str) -> Dict[str, Any]:
         user_id = user_id_match.group(1)
         follows_url = f"https://api.comick.dev/user/{user_id}/follows"
         
-        # Use cloudscraper to bypass Cloudflare protection
-        scraper = cloudscraper.create_scraper()
-        resp = scraper.get(follows_url)
+        resp = curl_requests.get(follows_url, impersonate="chrome120")
         
         if resp.status_code != 200:
             return {"error": f"Failed to fetch data: {resp.status_code}"}
@@ -119,19 +117,17 @@ async def scrape_get(url: str):
 @app.get("/cover")
 async def cover_endpoint(slug: str):
     """Fetch all cover image URLs for a comic by title search"""
-    scraper = cloudscraper.create_scraper()
+    from urllib.parse import quote
     headers = {
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://comick.io/",
-        "Origin": "https://comick.io",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "Referer": "https://comick.dev/",
+        "Origin": "https://comick.dev",
     }
 
     # 1. Search for the comic
-    from urllib.parse import quote
     search_url = f"https://api.comick.dev/v1.0/search?q={quote(slug)}&limit=49&page=1&content_rating=safe&content_rating=suggestive&content_rating=erotica&content_rating=pornographic"
-    search_resp = scraper.get(search_url, headers=headers, timeout=15)
+    search_resp = curl_requests.get(search_url, headers=headers, impersonate="chrome120", timeout=15)
     print(f"Search URL: {search_resp.url}")
     print(f"Search status: {search_resp.status_code}")
     print(f"Search response: {search_resp.text[:500]}")
@@ -148,10 +144,9 @@ async def cover_endpoint(slug: str):
         raise HTTPException(status_code=400, detail="Not Found")
 
     comic_slug = first["slug"]
-    comic_headers = {**headers, "Referer": f"https://comick.dev/comic/{comic_slug}"}
 
     # 2. Get build ID from homepage
-    home_resp = scraper.get("https://comick.dev", headers={"User-Agent": headers["User-Agent"]}, timeout=15)
+    home_resp = curl_requests.get("https://comick.dev", impersonate="chrome120", timeout=15)
     print(f"Homepage status: {home_resp.status_code}")
     build_id = None
     if home_resp.status_code == 200:
@@ -167,10 +162,11 @@ async def cover_endpoint(slug: str):
         raise HTTPException(status_code=400, detail="Not Found")
 
     # 3. Fetch covers from Next.js data
-    next_resp = scraper.get(
+    next_resp = curl_requests.get(
         f"https://comick.dev/_next/data/{build_id}/comic/{comic_slug}/cover.json",
         params={"slug": comic_slug},
-        headers=comic_headers,
+        headers={**headers, "Referer": f"https://comick.dev/comic/{comic_slug}"},
+        impersonate="chrome120",
         timeout=15
     )
     print(f"Next.js covers status: {next_resp.status_code}")
