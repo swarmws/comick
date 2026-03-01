@@ -128,106 +128,63 @@ async def cover_endpoint(slug: str):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
 
-    # 1. Resolve slug (accept direct slug; fallback to title search)
-    def normalize_slug(value: str) -> str:
-        value = value.strip().lower()
-        value = re.sub(r"[^a-z0-9]+", "-", value)
-        return re.sub(r"-+", "-", value).strip("-")
+    # 1. Search for the comic
+    from urllib.parse import quote
+    search_url = f"https://api.comick.dev/v1.0/search?q={quote(slug)}&limit=49&page=1&content_rating=safe&content_rating=suggestive&content_rating=erotica&content_rating=pornographic"
+    search_resp = scraper.get(search_url, headers=headers, timeout=15)
+    print(f"Search URL: {search_resp.url}")
+    print(f"Search status: {search_resp.status_code}")
+    print(f"Search response: {search_resp.text[:500]}")
 
-    candidate_slugs = []
-    input_slug = normalize_slug(slug)
-    if input_slug:
-        candidate_slugs.append(input_slug)
-
-    try:
-        search_resp = scraper.get(
-            "https://api.comick.dev/v1.0/search/",
-            params={"q": slug, "limit": 10, "type": "comic"},
-            headers=headers,
-            timeout=15
-        )
-        if search_resp.status_code == 200:
-            items = search_resp.json()
-            if not isinstance(items, list):
-                items = items.get("result", items.get("results", items.get("data", [])))
-            if isinstance(items, list):
-                for item in items:
-                    candidate = item.get("slug") if isinstance(item, dict) else None
-                    if candidate and candidate not in candidate_slugs:
-                        candidate_slugs.append(candidate)
-    except Exception:
-        pass
-
-    if not candidate_slugs:
+    if search_resp.status_code != 200:
         raise HTTPException(status_code=400, detail="Not Found")
 
-    # 2. Fetch covers from main API first; keep first matching slug with covers
-    comic_slug = None
-    covers = []
-    for candidate in candidate_slugs:
-        try:
-            comic_resp = scraper.get(
-                f"https://api.comick.dev/comic/{candidate}",
-                headers=headers,
-                timeout=15
-            )
-            if comic_resp.status_code != 200:
-                continue
-            comic_data = comic_resp.json()
-            raw = comic_data.get("comic", {}).get("md_covers", [])
-            candidate_covers = [
-                f"https://meo.comick.pictures/{c['b2key']}"
-                for c in raw
-                if isinstance(c, dict) and c.get("b2key")
-            ]
-            if candidate_covers:
-                comic_slug = candidate
-                covers = candidate_covers
-                break
-        except Exception:
-            continue
+    items = search_resp.json()
+    if not isinstance(items, list):
+        items = []
 
-    # If no covers from main API, still try Next.js using the first candidate
-    if comic_slug is None:
-        comic_slug = candidate_slugs[0]
+    first = next((item for item in items if isinstance(item, dict) and item.get("slug")), None)
+    if not first:
+        raise HTTPException(status_code=400, detail="Not Found")
 
-    comic_headers = {**headers, "Referer": f"https://comick.io/comic/{comic_slug}"}
+    comic_slug = first["slug"]
+    comic_headers = {**headers, "Referer": f"https://comick.dev/comic/{comic_slug}"}
 
-    # 3. Get build ID from homepage
-    build_id = None
+    # 2. Get build ID from homepage
     home_resp = scraper.get("https://comick.dev", headers={"User-Agent": headers["User-Agent"]}, timeout=15)
+    print(f"Homepage status: {home_resp.status_code}")
+    build_id = None
     if home_resp.status_code == 200:
         match = re.search(r'<script id="__NEXT_DATA__".*?>(.*?)</script>', home_resp.text, re.DOTALL)
         if match:
             try:
                 build_id = json.loads(match.group(1)).get("buildId")
-            except Exception:
-                pass
+                print(f"Build ID: {build_id}")
+            except Exception as e:
+                print(f"Build ID parse error: {e}")
 
     if not build_id:
         raise HTTPException(status_code=400, detail="Not Found")
 
-    # 4. Fetch additional covers from Next.js data
-    try:
-        next_resp = scraper.get(
-            f"https://comick.io/_next/data/{build_id}/comic/{comic_slug}/cover.json",
-            params={"slug": comic_slug},
-            headers=comic_headers,
-            timeout=15
-        )
-        if next_resp.status_code == 200:
-            page_props = next_resp.json().get("pageProps", {})
-            raw = page_props.get("md_covers") or page_props.get("comic", {}).get("md_covers", [])
-            extra_covers = [
-                f"https://meo.comick.pictures/{c['b2key']}"
-                for c in raw
-                if isinstance(c, dict) and c.get("b2key")
-            ]
-            for cover in extra_covers:
-                if cover not in covers:
-                    covers.append(cover)
-    except Exception:
-        pass
+    # 3. Fetch covers from Next.js data
+    next_resp = scraper.get(
+        f"https://comick.dev/_next/data/{build_id}/comic/{comic_slug}/cover.json",
+        params={"slug": comic_slug},
+        headers=comic_headers,
+        timeout=15
+    )
+    print(f"Next.js covers status: {next_resp.status_code}")
+    print(f"Next.js covers response: {next_resp.text[:300]}")
+    if next_resp.status_code != 200:
+        raise HTTPException(status_code=400, detail="Not Found")
+
+    page_props = next_resp.json().get("pageProps", {})
+    raw = page_props.get("md_covers") or page_props.get("comic", {}).get("md_covers", [])
+    covers = [
+        f"https://meo.comick.pictures/{c['b2key']}"
+        for c in raw
+        if isinstance(c, dict) and c.get("b2key")
+    ]
 
     if not covers:
         raise HTTPException(status_code=400, detail="Not Found")
