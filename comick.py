@@ -187,6 +187,60 @@ async def cover_endpoint(slug: str):
     return covers
 
 
+@app.get("/comments")
+async def comments_endpoint(url: str):
+    """Fetch comments for a Comick user"""
+    user_id_match = re.search(r"/user/([a-f0-9-]{36})", url)
+    if not user_id_match:
+        raise HTTPException(status_code=400, detail="Invalid user ID format")
+
+    user_id = user_id_match.group(1)
+    all_comments = []
+
+    for page in range(1, 21):
+        try:
+            resp = curl_requests.get(
+                f"https://api.comick.dev/user/{user_id}/comments?page={page}",
+                impersonate="chrome120",
+                timeout=15
+            )
+            if resp.status_code != 200:
+                break
+
+            data = resp.json()
+
+            # Stop if page returned null or empty
+            if not data:
+                break
+
+            for item in data:
+                if item is None:
+                    continue
+
+                comic = item.get("md_comics") or {}
+                covers = comic.get("md_covers") or []
+
+                has_image = len(covers) > 0
+                image_url = None
+                if has_image:
+                    b2key = covers[0].get("b2key")
+                    image_url = f"https://meo.comick.pictures/{b2key}" if b2key else None
+                    has_image = image_url is not None
+
+                all_comments.append({
+                    "content": item.get("parsed"),
+                    "image": has_image,
+                    "image_url": image_url if has_image else None,
+                    "date": item.get("created_at"),
+                    "manga_title": comic.get("title"),
+                })
+
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    return all_comments
+
+
 if __name__ == "__main__":
     uvicorn.run(
         app,
