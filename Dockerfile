@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY comick.py .
+COPY comick.py source_domain_map.json .
 
 EXPOSE 4775
 

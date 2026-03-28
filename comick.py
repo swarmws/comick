@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from curl_cffi import requests as curl_requests
 import json
+import os
 import re
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
@@ -18,100 +19,81 @@ _baka_rows: Optional[List[Dict[str, Any]]] = None
 _baka_mtime: Optional[float] = None
 _APOSTROPHE_CHARS = re.compile(r"[\u2018\u2019\u201a\u201b\u2032\u2035`´]")
 
+_PACKAGE_DIR = Path(__file__).resolve().parent
+_DEFAULT_SOURCE_DOMAIN_MAP_PATH = _PACKAGE_DIR / "source_domain_map.json"
 
-SOURCE_DOMAIN_MAP: Dict[str, Dict[str, str]] = {
-    "comic.naver.com": {"id": "naver-webtoon", "name": "Naver Webtoon", "type": "RAW"},
-    "series.naver.com": {"id": "naver-series", "name": "Naver Series", "type": "RAW"},
-    "webtoon.kakao.com": {"id": "kakao-webtoon", "name": "Kakao Webtoon", "type": "RAW"},
-    "page.kakao.com": {"id": "kakao-page", "name": "KakaoPage", "type": "RAW"},
-    "bomtoon.com": {"id": "bomtoon", "name": "Bomtoon", "type": "RAW"},
-    "lezhin.com/ko": {"id": "lezhin-kr", "name": "Lezhin (KR)", "type": "RAW"},
-    "ridibooks.com": {"id": "ridibooks", "name": "RidiBooks", "type": "RAW"},
-    "mrblue.com": {"id": "mrblue", "name": "MrBlue", "type": "RAW"},
-    "comico.kr": {"id": "comico-kr", "name": "Comico (KR)", "type": "RAW"},
-    "piccoma.com": {"id": "piccoma", "name": "Piccoma", "type": "RAW"},
-    "shonenjumpplus.com": {"id": "shonen-jump-plus", "name": "Shonen Jump+", "type": "RAW"},
-    "pocket.shonenmagazine.com": {"id": "magazine-pocket", "name": "Magazine Pocket", "type": "RAW"},
-    "manga-one.com": {"id": "manga-one", "name": "MangaONE", "type": "RAW"},
-    "ura-sunday.com": {"id": "ura-sunday", "name": "Ura Sunday", "type": "RAW"},
-    "comic-walker.com": {"id": "comic-walker", "name": "Comic Walker", "type": "RAW"},
-    "ganma.jp": {"id": "ganma", "name": "Ganma!", "type": "RAW"},
-    "comico.jp": {"id": "comico-jp", "name": "Comico (JP)", "type": "RAW"},
-    "line.me": {"id": "line-manga", "name": "LINE Manga", "type": "RAW"},
-    "pixiv.net": {"id": "pixiv-comic", "name": "Pixiv Comic", "type": "RAW"},
-    "nicovideo.jp": {"id": "niconico-seiga", "name": "Niconico Seiga", "type": "RAW"},
-    "cmoa.jp": {"id": "comic-cmoa", "name": "Comic Cmoa", "type": "RAW"},
-    "renta.papy.co.jp": {"id": "renta", "name": "Renta!", "type": "RAW"},
-    "bookwalker.jp": {"id": "bookwalker-jp", "name": "BookWalker (JP)", "type": "RAW"},
-    "kuaikanmanhua.com": {"id": "kuaikan", "name": "Kuaikan", "type": "RAW"},
-    "ac.qq.com": {"id": "tencent", "name": "Tencent", "type": "RAW"},
-    "bilibili.com": {"id": "bilibili", "name": "Bilibili", "type": "RAW"},
-    "dongmanmanhua.cn": {"id": "dongman-manhua", "name": "Dongman Manhua", "type": "RAW"},
-    "webtoons.com": {"id": "webtoon", "name": "Webtoon", "type": "OFFICIAL"},
-    "tapas.io": {"id": "tapas", "name": "Tapas", "type": "OFFICIAL"},
-    "tappytoon.com": {"id": "tappytoon", "name": "Tappytoon", "type": "OFFICIAL"},
-    "lezhin.com/en": {"id": "lezhin-en", "name": "Lezhin (EN)", "type": "OFFICIAL"},
-    "lezhin.com/us": {"id": "lezhin-us", "name": "Lezhin (US)", "type": "OFFICIAL"},
-    "mangaplus.shueisha.co.jp": {"id": "mangaplus", "name": "MangaPlus", "type": "OFFICIAL"},
-    "viz.com": {"id": "viz", "name": "Viz", "type": "OFFICIAL"},
-    "bilibilicomics.com": {"id": "bilibili-comics", "name": "Bilibili Comics", "type": "OFFICIAL"},
-    "copincomics.com": {"id": "copin", "name": "Copin", "type": "OFFICIAL"},
-    "pocketcomics.com": {"id": "pocket-comics", "name": "Pocket Comics", "type": "OFFICIAL"},
-    "manta.net": {"id": "manta", "name": "Manta", "type": "OFFICIAL"},
-    "toomics.com": {"id": "toomics", "name": "Toomics", "type": "OFFICIAL"},
-    "j-novel.club": {"id": "j-novel-club", "name": "J-Novel Club", "type": "OFFICIAL"},
-    "sevenseasentertainment.com": {"id": "seven-seas", "name": "Seven Seas", "type": "OFFICIAL"},
-    "yenpress.com": {"id": "yen-press", "name": "Yen Press", "type": "OFFICIAL"},
-    "kodansha.us": {"id": "kodansha", "name": "Kodansha", "type": "OFFICIAL"},
-    "azuki.co": {"id": "azuki", "name": "Azuki", "type": "OFFICIAL"},
-    "inkr.com": {"id": "inkr", "name": "INKR", "type": "OFFICIAL"},
-    "alpha-manga.com": {"id": "alpha-manga", "name": "Alpha Manga", "type": "OFFICIAL"},
-    "kmanga.kodansha.com": {"id": "k-manga", "name": "K Manga", "type": "OFFICIAL"},
-    "mangaupdates.com": {"id": "mangaupdates", "name": "MangaUpdates", "type": "DATABASE"},
-    "myanimelist.net": {"id": "myanimelist", "name": "MyAnimeList", "type": "DATABASE"},
-    "anilist.co": {"id": "anilist", "name": "AniList", "type": "DATABASE"},
-    "kitsu.io": {"id": "kitsu", "name": "Kitsu", "type": "DATABASE"},
-    "anime-planet.com": {"id": "anime-planet", "name": "Anime-Planet", "type": "DATABASE"},
-    "mangadex.org": {"id": "mangadex", "name": "MangaDex", "type": "DATABASE"},
-    "nautiljon.com": {"id": "nautiljon", "name": "Nautiljon", "type": "DATABASE"},
-    "mangabaka.org": {"id": "mangabaka", "name": "MangaBaka", "type": "DATABASE"},
-    "mangabaka.dev": {"id": "mangabaka", "name": "MangaBaka", "type": "DATABASE"},
-    "comick.dev": {"id": "comick", "name": "Comick", "type": "DATABASE"},
-    "comick.io": {"id": "comick", "name": "Comick", "type": "DATABASE"},
-    "shikimori.one": {"id": "shikimori", "name": "Shikimori", "type": "DATABASE"},
-    "animenewsnetwork.com": {"id": "ann", "name": "Anime News Network", "type": "DATABASE"},
-    "wikipedia.org": {"id": "wikipedia", "name": "Wikipedia", "type": "WIKI"},
-    "fandom.com": {"id": "fandom", "name": "Fandom", "type": "WIKI"},
-    "namu.wiki": {"id": "namu-wiki", "name": "Namu Wiki", "type": "WIKI"},
-    "bookwalker.com": {"id": "bookwalker-global", "name": "BookWalker (Global)", "type": "OTHER"},
-    "amazon.co.jp": {"id": "amazon-jp", "name": "Amazon (JP)", "type": "OTHER"},
-    "amazon.com": {"id": "amazon", "name": "Amazon", "type": "OTHER"},
-    "cdjapan.co.jp": {"id": "cdjapan", "name": "CDJapan", "type": "OTHER"},
-    "ebookjapan.jp": {"id": "ebookjapan", "name": "eBookJapan", "type": "OTHER"},
-    "global.bookwalker.jp": {"id": "bookwalker-global", "name": "BookWalker (Global)", "type": "OTHER"},
-}
 
-_SOURCE_DOMAIN_KEYS_SORTED: List[str] = sorted(SOURCE_DOMAIN_MAP.keys(), key=len, reverse=True)
+def _load_source_domain_map_bundle(path: Path) -> Tuple[
+    Dict[str, Dict[str, str]],
+    List[str],
+    Dict[str, Dict[str, str]],
+    Dict[str, str],
+    Dict[str, str],
+    Dict[str, str],
+    List[str],
+]:
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    raw_domains = data.get("domain_map")
+    if not isinstance(raw_domains, dict):
+        raise ValueError(f"{path}: missing or invalid 'domain_map' object")
+    domain_map: Dict[str, Dict[str, str]] = {}
+    track_by_id: Dict[str, Dict[str, str]] = {}
+    for dom_key, meta in raw_domains.items():
+        if not isinstance(meta, dict):
+            continue
+        iid = meta.get("id")
+        if iid is None or iid == "":
+            continue
+        sid = str(iid)
+        row = {
+            "id": sid,
+            "name": str(meta.get("name", sid)),
+            "type": str(meta.get("type", "OTHER")),
+        }
+        domain_map[str(dom_key)] = row
+        if sid not in track_by_id:
+            track_by_id[sid] = dict(row)
+    keys_sorted = sorted(domain_map.keys(), key=len, reverse=True)
+    phrases_raw = data.get("publisher_name_phrases") or {}
+    phrase_to_id: Dict[str, str] = {str(k): str(v) for k, v in phrases_raw.items()}
+    phrase_keys_sorted = sorted(phrase_to_id.keys(), key=len, reverse=True)
+    publisher_home = data.get("publisher_home_by_id") or {}
+    if not isinstance(publisher_home, dict):
+        publisher_home = {}
+    publisher_home = {str(k): str(v) for k, v in publisher_home.items()}
+    baka_null = data.get("baka_null_source_home") or {}
+    if not isinstance(baka_null, dict):
+        baka_null = {}
+    baka_null = {str(k): str(v) for k, v in baka_null.items()}
+    return (
+        domain_map,
+        keys_sorted,
+        track_by_id,
+        publisher_home,
+        baka_null,
+        phrase_to_id,
+        phrase_keys_sorted,
+    )
 
-# Publisher names from Baka when there is no URL — longest keys first for matching
-PUBLISHER_TRACK_OVERRIDES: Dict[str, Dict[str, str]] = {
-    "yen press": {"id": "yen-press", "name": "Yen Press", "type": "OFFICIAL"},
-    "tapas": {"id": "tapas", "name": "Tapas", "type": "OFFICIAL"},
-    "webtoon": {"id": "webtoon", "name": "Webtoon", "type": "OFFICIAL"},
-    "tappytoon": {"id": "tappytoon", "name": "Tappytoon", "type": "OFFICIAL"},
-    "naver": {"id": "naver-series", "name": "Naver Series", "type": "RAW"},
-    "kakao": {"id": "kakao-page", "name": "KakaoPage", "type": "RAW"},
-    "wattpad": {"id": "wattpad", "name": "Wattpad", "type": "OTHER"},
-    "yonder": {"id": "yonder", "name": "Yonder", "type": "OTHER"},
-    "maslow limited": {"id": "maslow-limited", "name": "Maslow Limited", "type": "OTHER"},
-    "maslow": {"id": "maslow-limited", "name": "Maslow Limited", "type": "OTHER"},
-    "kisai entertainment": {"id": "kisai-entertainment", "name": "Kisai Entertainment", "type": "OTHER"},
-    "kisai": {"id": "kisai-entertainment", "name": "Kisai Entertainment", "type": "OTHER"},
-    "viz": {"id": "viz", "name": "Viz", "type": "OFFICIAL"},
-    "kodansha": {"id": "kodansha", "name": "Kodansha", "type": "OFFICIAL"},
-    "seven seas": {"id": "seven-seas", "name": "Seven Seas", "type": "OFFICIAL"},
-    "j-novel": {"id": "j-novel-club", "name": "J-Novel Club", "type": "OFFICIAL"},
-}
+
+_src_map_env = os.environ.get("COMICK_SOURCE_DOMAIN_MAP")
+_source_map_path = Path(_src_map_env) if _src_map_env else _DEFAULT_SOURCE_DOMAIN_MAP_PATH
+if not _source_map_path.is_file():
+    raise FileNotFoundError(
+        f"Source map not found: {_source_map_path} "
+        "(set COMICK_SOURCE_DOMAIN_MAP to a JSON path, or add source_domain_map.json next to comick.py)"
+    )
+
+(
+    SOURCE_DOMAIN_MAP,
+    _SOURCE_DOMAIN_KEYS_SORTED,
+    _TRACK_BY_ID,
+    PUBLISHER_HOME_BY_ID,
+    BAKA_NULL_SOURCE_HOME,
+    _PUBLISHER_NAME_PHRASES,
+    _PUBLISHER_PHRASE_KEYS_SORTED,
+) = _load_source_domain_map_bundle(_source_map_path)
 
 
 def _baka_source_url(key: str, sid: Any) -> Optional[str]:
@@ -162,11 +144,15 @@ def lookup_track_by_url(url: str) -> Dict[str, Any]:
 def lookup_track_by_publisher_name(name: str) -> Dict[str, Any]:
     n = name.strip()
     nl = n.lower()
-    for key, meta in sorted(PUBLISHER_TRACK_OVERRIDES.items(), key=lambda kv: -len(kv[0])):
-        if nl == key or key in nl:
-            return {"id": meta["id"], "name": meta["name"], "type": meta["type"], "url": None}
+    for phrase in _PUBLISHER_PHRASE_KEYS_SORTED:
+        pid = _PUBLISHER_NAME_PHRASES[phrase]
+        if nl == phrase or phrase in nl:
+            meta = _TRACK_BY_ID.get(pid)
+            if meta:
+                return {"id": meta["id"], "name": meta["name"], "type": meta["type"], "url": None}
+            return {"id": pid, "name": n, "type": "OTHER", "url": None}
     candidates: List[Dict[str, str]] = []
-    for meta in SOURCE_DOMAIN_MAP.values():
+    for meta in _TRACK_BY_ID.values():
         if not isinstance(meta, dict):
             continue
         mn = str(meta.get("name", "")).lower()
@@ -183,47 +169,6 @@ def lookup_track_by_publisher_name(name: str) -> Dict[str, Any]:
             "url": None,
         }
     return {"id": _track_id_slug(n), "name": n, "type": "OTHER", "url": None}
-
-
-# Homepage when Baka has publisher name but no URL (after Comick link merge)
-PUBLISHER_HOME_BY_ID: Dict[str, str] = {
-    "tapas": "https://tapas.io/",
-    "yen-press": "https://yenpress.com/",
-    "webtoon": "https://www.webtoons.com/",
-    "tappytoon": "https://www.tappytoon.com/",
-    "viz": "https://www.viz.com/",
-    "kodansha": "https://kodansha.us/",
-    "seven-seas": "https://sevenseasentertainment.com/",
-    "j-novel-club": "https://j-novel.club/",
-    "azuki": "https://www.azuki.co/",
-    "manta": "https://manta.net/",
-    "toomics": "https://toomics.com/",
-    "naver-series": "https://series.naver.com/",
-    "naver-webtoon": "https://comic.naver.com/",
-    "kakao-page": "https://page.kakao.com/",
-    "kakao-webtoon": "https://webtoon.kakao.com/",
-    "wattpad": "https://www.wattpad.com/",
-    "yonder": "https://www.yonderfiction.com/",
-    "maslow-limited": "https://maslow.co.kr/",
-    "kisai-entertainment": "https://www.kisaientertainment.com/",
-    "bilibili-comics": "https://www.bilibilicomics.com/",
-    "mangaplus": "https://mangaplus.shueisha.co.jp/",
-    "pocket-comics": "https://www.pocketcomics.com/",
-    "alpha-manga": "https://alpha-manga.com/",
-    "k-manga": "https://kmanga.kodansha.com/",
-    "inkr": "https://inkr.com/",
-    "copin": "https://copincomics.com/",
-    "lezhin-en": "https://www.lezhin.com/en/",
-    "lezhin-us": "https://www.lezhin.com/en/",
-    "lezhin-kr": "https://www.lezhin.com/ko/",
-}
-
-# Baka `source` keys with no id — still list a canonical site URL
-BAKA_NULL_SOURCE_HOME: Dict[str, str] = {
-    "anime_news_network": "https://www.animenewsnetwork.com/",
-    "kitsu": "https://kitsu.io/",
-    "shikimori": "https://shikimori.one/",
-}
 
 
 def _comick_raw_link_to_url(key: str, raw: Any) -> Optional[str]:
@@ -267,24 +212,50 @@ def comick_links_to_track_sources(comic: Optional[Dict[str, Any]]) -> List[Dict[
     return out
 
 
+_URL_IN_TEXT = re.compile(r"https?://[^\s\)\]\"'<>]+", re.I)
+
+
+def comic_desc_urls_to_track_sources(comic: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Comick often lists official/raw storefront URLs only in markdown `desc` / HTML `parsed`, not in `links`."""
+    if not comic or not isinstance(comic, dict):
+        return []
+    chunks: List[str] = []
+    for key in ("desc", "parsed"):
+        v = comic.get(key)
+        if isinstance(v, str) and v.strip():
+            chunks.append(v)
+    if not chunks:
+        return []
+    text = "\n".join(chunks)
+    seen: set = set()
+    out: List[Dict[str, Any]] = []
+    for raw in _URL_IN_TEXT.findall(text):
+        u = raw.rstrip(").,;\\]\"'")
+        if not u.startswith("http"):
+            continue
+        key = u.strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(lookup_track_by_url(u))
+    return out
+
+
 def merge_and_finalize_sources(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    by_id: Dict[str, Dict[str, Any]] = {}
-    order: List[str] = []
+    seen_urls: set = set()
+    out: List[Dict[str, Any]] = []
     for s in parts:
         iid = s.get("id")
         if not iid:
             continue
-        if iid not in by_id:
-            by_id[iid] = {**s}
-            order.append(iid)
-        else:
-            old = by_id[iid]
-            ou, nu = old.get("url"), s.get("url")
-            if ou is None and nu:
-                by_id[iid] = {**s}
-            elif ou and nu and len(str(nu)) > len(str(ou)):
-                by_id[iid] = {**s}
-    out = [by_id[i] for i in order]
+        row = dict(s)
+        u = row.get("url")
+        if isinstance(u, str) and u.strip():
+            uk = u.strip().lower()
+            if uk in seen_urls:
+                continue
+            seen_urls.add(uk)
+        out.append(row)
     for s in out:
         if s.get("url") is None:
             hid = s.get("id")
@@ -653,6 +624,7 @@ def merge_info_sources(
         )
     if comic:
         parts.extend(comick_links_to_track_sources(comic))
+        parts.extend(comic_desc_urls_to_track_sources(comic))
     if baka_row:
         parts.extend(baka_build_sources(baka_row))
     return merge_and_finalize_sources(parts)
