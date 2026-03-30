@@ -297,6 +297,18 @@ def comick_status_label(code: Any) -> str:
     return "unknown"
 
 
+def infer_series_type_from_country(country: Any) -> str:
+    c = str(country or "").strip().lower()
+    if c == "jp":
+        return "manga"
+    if c == "kr":
+        return "manhwa"
+    if c in ("cn", "tw", "hk"):
+        return "manhua"
+    # Default for US/GB and all other countries.
+    return "comic"
+
+
 def normalize_info_description(text: Any) -> Optional[str]:
     if text is None or not isinstance(text, str):
         return None
@@ -444,6 +456,7 @@ def comick_map_comic(
     if not isinstance(lang_list, list):
         lang_list = []
 
+    country = comic.get("country")
     return {
         "description": normalize_info_description(comic.get("desc")),
         "status": comick_status_label(comic.get("status")),
@@ -453,7 +466,8 @@ def comick_map_comic(
         "translationComplete": comic.get("translation_completed"),
         "ended": comic.get("final_chapter"),
         "demographic": comic.get("demographic"),
-        "origination": comic.get("country"),
+        "origination": country,
+        "type": infer_series_type_from_country(country),
         "nsfw": nsfw,
         "anime": comic.get("anime"),
         "altTitles": alt_titles,
@@ -656,6 +670,7 @@ def baka_map_to_info(entry: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(p, dict) and p.get("name")
     ]
 
+    country = entry.get("country")
     return {
         "description": normalize_info_description(entry.get("description")),
         "status": entry.get("status"),
@@ -665,7 +680,8 @@ def baka_map_to_info(entry: Dict[str, Any]) -> Dict[str, Any]:
         "translationComplete": None,
         "ended": entry.get("final_volume"),
         "demographic": None,
-        "origination": None,
+        "origination": country,
+        "type": infer_series_type_from_country(country),
         "nsfw": nsfw,
         "anime": entry.get("anime"),
         "altTitles": alt,
