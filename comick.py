@@ -7,9 +7,12 @@ A FastAPI service for scraping Comick lists
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from curl_cffi import requests as curl_requests
+import argparse
 import json
 import os
 import re
+import sys
+import time
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 from urllib.parse import quote, urlparse
@@ -18,6 +21,33 @@ import uvicorn
 _baka_rows: Optional[List[Dict[str, Any]]] = None
 _baka_mtime: Optional[float] = None
 _APOSTROPHE_CHARS = re.compile(r"[\u2018\u2019\u201a\u201b\u2032\u2035`´]")
+
+DEBUG = os.environ.get("COMICK_DEBUG", "").lower() in ("1", "true", "yes")
+
+
+def debug(msg: str) -> None:
+    if DEBUG:
+        print(f"[debug] {msg}", flush=True)
+
+
+def http_get(url: str, **kwargs: Any) -> Any:
+    kwargs.setdefault("impersonate", "chrome120")
+    kwargs.setdefault("timeout", 15)
+    start = time.monotonic()
+    try:
+        resp = curl_requests.get(url, **kwargs)
+    except Exception as e:
+        debug(f"GET {url} params={kwargs.get('params')} -> EXCEPTION {e!r}")
+        raise
+    ms = (time.monotonic() - start) * 1000
+    debug(
+        f"GET {url} params={kwargs.get('params')} -> {resp.status_code} "
+        f"{resp.headers.get('content-type')} {len(resp.content)}B {ms:.0f}ms"
+    )
+    if resp.status_code != 200:
+        debug(f"  body: {resp.text[:300]!r}")
+    return resp
+
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _DEFAULT_SOURCE_DOMAIN_MAP_PATH = _PACKAGE_DIR / "source_domain_map.json"
@@ -284,11 +314,13 @@ def comick_search(query: str) -> List[Dict[str, Any]]:
         f"?q={quote(q)}&limit=49&page=1"
         "&content_rating=safe&content_rating=suggestive&content_rating=erotica&content_rating=pornographic"
     )
-    resp = curl_requests.get(search_url, headers=COMICK_BROWSER_HEADERS, impersonate="chrome120", timeout=15)
+    resp = http_get(search_url, headers=COMICK_BROWSER_HEADERS)
     if resp.status_code != 200:
         return []
     data = resp.json()
-    return data if isinstance(data, list) else []
+    results = data if isinstance(data, list) else []
+    debug(f"search {q!r}: {len(results)} hits, first slugs={[r.get('slug') for r in results[:5] if isinstance(r, dict)]}")
+    return results
 
 
 def comick_status_label(code: Any) -> str:
@@ -346,70 +378,38 @@ def _people_names(rows: Any) -> List[str]:
     return [p["name"] for p in rows if isinstance(p, dict) and p.get("name")]
 
 
-def get_comick_build_id() -> Optional[str]:
-    home_resp = curl_requests.get("https://comick.dev", impersonate="chrome120", timeout=15)
-    if home_resp.status_code != 200:
-        return None
-    match = re.search(r'<script id="__NEXT_DATA__".*?>(.*?)</script>', home_resp.text, re.DOTALL)
-    if not match:
-        return None
-    try:
-        return json.loads(match.group(1)).get("buildId")
-    except Exception:
-        return None
-
-
-def comick_fetch_covers(comic_slug: str, build_id: Optional[str] = None) -> List[str]:
-    if not build_id:
-        build_id = get_comick_build_id()
-    if not build_id:
-        return []
-    next_resp = curl_requests.get(
-        f"https://comick.dev/_next/data/{build_id}/comic/{comic_slug}/cover.json",
-        params={"slug": comic_slug},
-        headers={
-            **COMICK_BROWSER_HEADERS,
-            "Referer": f"https://comick.dev/comic/{comic_slug}",
-        },
-        impersonate="chrome120",
-        timeout=15,
+def comick_fetch_covers(comic_slug: str) -> List[str]:
+    resp = http_get(
+        f"https://api.comick.dev/comic/{quote(comic_slug, safe='')}/covers",
+        headers={**COMICK_BROWSER_HEADERS, "Referer": f"https://comick.dev/comic/{comic_slug}"},
     )
-    if next_resp.status_code != 200:
+    if resp.status_code != 200:
         return []
-    page_props = next_resp.json().get("pageProps", {})
-    raw = page_props.get("md_covers") or page_props.get("comic", {}).get("md_covers", [])
-    return [
+    data = resp.json()
+    raw = data.get("md_covers") if isinstance(data, dict) else None
+    covers = [
         f"https://meo.comick.pictures/{c['b2key']}"
-        for c in raw
+        for c in raw or []
         if isinstance(c, dict) and c.get("b2key")
     ]
+    debug(f"covers for {comic_slug!r}: {len(covers)}")
+    return covers
 
 
-def comick_fetch_comic_page(
-    comic_slug: str,
-) -> Tuple[Optional[Dict[str, Any]], Optional[str], Dict[str, Any]]:
-    build_id = get_comick_build_id()
-    if not build_id:
-        return None, None, {}
-    url = f"https://comick.dev/_next/data/{build_id}/comic/{comic_slug}.json"
-    resp = curl_requests.get(
-        url,
-        params={"slug": comic_slug},
-        headers={
-            **COMICK_BROWSER_HEADERS,
-            "Referer": f"https://comick.dev/comic/{comic_slug}",
-        },
-        impersonate="chrome120",
-        timeout=15,
+def comick_fetch_comic_page(comic_slug: str) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    resp = http_get(
+        f"https://api.comick.dev/comic/{quote(comic_slug, safe='')}/",
+        headers={**COMICK_BROWSER_HEADERS, "Referer": f"https://comick.dev/comic/{comic_slug}"},
     )
     data = resp.json() if resp.status_code == 200 else {}
-    page_props = data.get("pageProps") if isinstance(data, dict) else {}
-    if not isinstance(page_props, dict):
-        page_props = {}
-    comic = page_props.get("comic")
+    if not isinstance(data, dict):
+        data = {}
+    comic = data.get("comic")
     if not isinstance(comic, dict):
-        return None, build_id, page_props
-    return comic, build_id, page_props
+        debug(f"comic page for {comic_slug!r}: no 'comic' object (keys={list(data.keys())})")
+        return None, data
+    debug(f"comic page for {comic_slug!r}: title={comic.get('title')!r}")
+    return comic, data
 
 
 def comick_map_comic(
@@ -715,27 +715,32 @@ def resolve_info_by_title(t: str) -> Dict[str, Any]:
         baka_candidates.append(str(first_hit.get("title") or ""))
         baka_candidates.extend(slug_title_candidates(str(first_hit["slug"])))
 
+    debug(f"resolve {t!r}: first_hit={first_hit.get('slug') if first_hit else None!r}")
+
     comic: Optional[Dict[str, Any]] = None
-    build_id: Optional[str] = None
     comic_slug: Optional[str] = None
     page_props: Dict[str, Any] = {}
     if first_hit:
         comic_slug = str(first_hit["slug"])
-        comic, build_id, page_props = comick_fetch_comic_page(comic_slug)
+        comic, page_props = comick_fetch_comic_page(comic_slug)
 
     tracker_slug: Optional[str] = str(first_hit["slug"]) if first_hit else None
 
     if comic and comic_slug:
-        covers = comick_fetch_covers(comic_slug, build_id)
+        covers = comick_fetch_covers(comic_slug)
         payload = comick_map_comic(comic, covers, page_props)
         baka_candidates.append(str(comic.get("title") or ""))
         baka_candidates.append(str(comic.get("englishTitle") or ""))
         baka_row = baka_find_match(*baka_candidates)
+        debug(f"resolve {t!r}: baka match={baka_row.get('title') if baka_row else None!r}")
         payload["sources"] = merge_info_sources(comic_slug, baka_row, comic)
+        debug(f"resolve {t!r}: OK via comick, {len(payload['sources'])} sources")
         return payload
 
+    debug(f"resolve {t!r}: comick failed, trying baka.json with candidates={baka_candidates}")
     baka_row = baka_find_match(*baka_candidates)
     if not baka_row:
+        debug(f"resolve {t!r}: no baka.json match ({len(load_baka_data())} rows loaded) -> 404")
         raise HTTPException(status_code=404, detail="Not Found")
     payload = baka_map_to_info(baka_row)
     payload["sources"] = merge_info_sources(tracker_slug, baka_row, None)
@@ -768,7 +773,7 @@ def scrape_comick_list(url: str) -> Dict[str, Any]:
         user_id = user_id_match.group(1)
         follows_url = f"https://api.comick.dev/user/{user_id}/follows"
         
-        resp = curl_requests.get(follows_url, impersonate="chrome120")
+        resp = http_get(follows_url)
         
         if resp.status_code != 200:
             return {"error": f"Failed to fetch data: {resp.status_code}"}
@@ -868,15 +873,12 @@ async def scrape_get(url: str):
 async def cover_endpoint(slug: str):
     """Fetch all cover image URLs for a comic by title search"""
     items = comick_search(slug)
-    print(f"Search slug={slug!r} -> {len(items)} raw hits")
 
     first = next((item for item in items if isinstance(item, dict) and item.get("slug")), None)
     if not first:
         raise HTTPException(status_code=400, detail="Not Found")
 
-    comic_slug = first["slug"]
-    covers = comick_fetch_covers(comic_slug)
-    print(f"Covers fetched: {len(covers)}")
+    covers = comick_fetch_covers(first["slug"])
 
     if not covers:
         raise HTTPException(status_code=400, detail="Not Found")
@@ -894,11 +896,7 @@ async def comments_endpoint(url: str):
 
     for page in range(1, 21):
         try:
-            resp = curl_requests.get(
-                f"https://api.comick.dev/user/{user_id}/comments?page={page}",
-                impersonate="chrome120",
-                timeout=15
-            )
+            resp = http_get(f"https://api.comick.dev/user/{user_id}/comments?page={page}")
             if resp.status_code != 200:
                 break
 
@@ -932,10 +930,16 @@ async def comments_endpoint(url: str):
     return all_comments
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-debug", "--debug", action="store_true", help="log every upstream request and lookup step")
+    args = parser.parse_args()
+    if args.debug:
+        DEBUG = True
+        debug(f"debug on, python {sys.version.split()[0]}, source map {_source_map_path}")
     uvicorn.run(
         app,
         host="0.0.0.0",
         port=4775,
         reload=False,
-        log_level="info"
+        log_level="debug" if args.debug else "info"
     )
