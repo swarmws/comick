@@ -398,7 +398,7 @@ def comick_fetch_covers(comic_slug: str) -> List[str]:
 
 def comick_fetch_comic_page(comic_slug: str) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
     resp = http_get(
-        f"https://api.comick.dev/comic/{quote(comic_slug, safe='')}/",
+        f"https://api.comick.dev/v1.0/comic/{quote(comic_slug, safe='')}/",
         headers={**COMICK_BROWSER_HEADERS, "Referer": f"https://comick.dev/comic/{comic_slug}"},
     )
     data = resp.json() if resp.status_code == 200 else {}
@@ -723,6 +723,9 @@ def resolve_info_by_title(t: str) -> Dict[str, Any]:
     if first_hit:
         comic_slug = str(first_hit["slug"])
         comic, page_props = comick_fetch_comic_page(comic_slug)
+        if comic is None:
+            debug(f"resolve {t!r}: comic page unavailable, using search hit data")
+            comic = first_hit
 
     tracker_slug: Optional[str] = str(first_hit["slug"]) if first_hit else None
 
