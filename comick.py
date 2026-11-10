@@ -379,9 +379,10 @@ def _people_names(rows: Any) -> List[str]:
 
 
 def comick_fetch_covers(comic_slug: str) -> List[str]:
+    slug_q = quote(comic_slug, safe="")
     resp = http_get(
-        f"https://api.comick.dev/comic/{quote(comic_slug, safe='')}/covers",
-        headers={**COMICK_BROWSER_HEADERS, "Referer": f"https://comick.dev/comic/{comic_slug}"},
+        f"https://api.comick.dev/comic/{slug_q}/covers",
+        headers={**COMICK_BROWSER_HEADERS, "Referer": f"https://comick.dev/comic/{slug_q}"},
     )
     if resp.status_code != 200:
         return []
@@ -397,9 +398,10 @@ def comick_fetch_covers(comic_slug: str) -> List[str]:
 
 
 def comick_fetch_comic_page(comic_slug: str) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    slug_q = quote(comic_slug, safe="")
     resp = http_get(
-        f"https://api.comick.dev/v1.0/comic/{quote(comic_slug, safe='')}/",
-        headers={**COMICK_BROWSER_HEADERS, "Referer": f"https://comick.dev/comic/{comic_slug}"},
+        f"https://api.comick.dev/v1.0/comic/{slug_q}/",
+        headers={**COMICK_BROWSER_HEADERS, "Referer": f"https://comick.dev/comic/{slug_q}"},
     )
     data = resp.json() if resp.status_code == 200 else {}
     if not isinstance(data, dict):
